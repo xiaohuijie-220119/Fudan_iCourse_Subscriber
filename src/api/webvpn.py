@@ -364,8 +364,7 @@ class WebVPNSession:
             except Exception:
                 pass
 
-        print("    Could not verify iCourse auth via API, proceeding...")
-        return True
+        raise RuntimeError("icourse_api_verification_failed")
 
     def get(self, url: str, **kwargs) -> requests.Response:
         """GET request through WebVPN. Converts URL automatically."""
@@ -402,7 +401,11 @@ class WebVPNSession:
 
         # Follow redirects manually to extract lck
         location = resp.headers.get("Location", "")
+        redirect_count = 0
         while resp.status_code in (301, 302) and "lck=" not in location:
+            redirect_count += 1
+            if redirect_count > 12:
+                raise RuntimeError("authentication_redirect_limit")
             resp = self.session.get(location, allow_redirects=False, timeout=60)
             location = resp.headers.get("Location", "")
 
@@ -574,26 +577,14 @@ class WebVPNSession:
 
     def _establish_session(self, ticket_url: str):
         """Step 7: Follow the ticket URL to establish WebVPN session."""
-        for attempt in range(3):
-            try:
-                resp = self.session.get(
-                    ticket_url, allow_redirects=True, timeout=20
-                )
-                if resp.status_code == 200:
-                    print("    Session established.")
-                    return
-                raise RuntimeError(
-                    f"Failed to establish WebVPN session (status={resp.status_code})"
-                )
-            except requests.exceptions.Timeout:
-                has_ticket = any(
-                    "wengine_vpn_ticket" in c.name
-                    for c in self.session.cookies
-                )
-                if has_ticket:
-                    print("    Session cookie set despite timeout.")
-                    return
-                if attempt < 2:
-                    print(f"    Timeout, retrying ({attempt + 2}/3)...")
-                    continue
+        # CAS tickets are single-use. Retry the complete login, not this URL.
+        try:
+            resp = self.session.get(ticket_url, allow_redirects=True, timeout=60)
+            if resp.status_code != 200:
+                raise RuntimeError("webvpn_ticket_failed")
+        except requests.exceptions.Timeout:
+            if not any("wengine_vpn_ticket" in c.name for c in self.session.cookies):
                 raise
+        resp = self.session.get(config.WEBVPN_BASE + "/", allow_redirects=False, timeout=10)
+        if resp.status_code != 200:
+            raise RuntimeError("webvpn_session_verification_failed")
