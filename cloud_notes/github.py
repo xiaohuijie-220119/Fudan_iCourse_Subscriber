@@ -5,6 +5,10 @@ import re
 import urllib.request
 import urllib.error
 
+class GitHubConnectionError(RuntimeError):
+    """Safe, fixed transport diagnostic; never include URLs or exception text."""
+    pass
+
 class APIError(RuntimeError):
     def __init__(self, status, operation='GitHub 操作', reason='', permissions=''):
         self.status = status
@@ -65,8 +69,18 @@ class GitHub:
                 return json.loads(data) if data else {}
         except urllib.error.HTTPError as error:
             raise safe_failure(error,path,req.method) from None
-        except (OSError, ValueError):
-            raise RuntimeError('无法连接 GitHub，请检查网络后重试') from None
+        except OSError as error:
+            reason=getattr(error,'reason',error)
+            category=type(reason).__name__
+            import socket
+            import ssl
+            if isinstance(reason,socket.gaierror):label='DNS 域名解析失败'
+            elif isinstance(reason,ssl.SSLError):label='HTTPS 证书或 TLS 连接失败'
+            elif isinstance(reason,(TimeoutError,socket.timeout)):label='网络连接超时'
+            else:label='网络连接失败'
+            raise GitHubConnectionError('连接 GitHub：'+label+'（'+category+'）') from None
+        except ValueError:
+            raise GitHubConnectionError('GitHub 返回了无法解析的响应，请检查代理或网络连接') from None
 
     def head(self, branch):
         try:
