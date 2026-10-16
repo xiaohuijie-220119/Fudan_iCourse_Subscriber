@@ -36,7 +36,13 @@ def safe_failure(error,path,method):
     try:message=str(json.loads(error.read(16000)).get('message','')).lower()
     except Exception:message=''
     reason=''
-    if headers.get('X-RateLimit-Remaining')=='0':reason='GitHub API 配额已用完，请稍后再试，不必修改 Token 权限'
+    if 'cannot trigger' in message and 'disabled workflow' in message:
+        reason='这个工作流目前已停用，需要先启用 iCourse Cloud Notes，才能启动课程检查'
+    elif 'workflow_dispatch' in message and any(word in message for word in ('does not have','not found','not configured')):
+        reason='GitHub 尚未识别该分支的手动启动入口，请核对默认分支中的工作流文件'
+    elif 'ref' in message and any(word in message for word in ('not found','no ref','invalid ref')):
+        reason='请求的分支不存在，请重新验证仓库默认分支'
+    elif headers.get('X-RateLimit-Remaining')=='0':reason='GitHub API 配额已用完，请稍后再试，不必修改 Token 权限'
     elif 'rate limit' in message or headers.get('Retry-After'):reason='GitHub 暂时限制请求频率，请稍后再试'
     elif 'workflow' in message and any(word in message for word in ('refusing','permission','scope')):
         reason='Token 缺少 Workflows 写权限；请在 GitHub 编辑这个 Token 的仓库权限'
