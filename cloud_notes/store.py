@@ -49,6 +49,8 @@ class Store:
             existing[relative] = {'path':relative, 'blob':blob, 'size':path.stat().st_size}
         self.manifest['documents'] = list(existing.values())
         if db is not None:
+            from cloud_notes.lecture_status import snapshot
+            self.manifest['lectures']=snapshot(db,documents=self.manifest['documents'])
             with tempfile.TemporaryDirectory() as directory:
                 snapshot = Path(directory)/'state.db'
                 copy = sqlite3.connect(snapshot)

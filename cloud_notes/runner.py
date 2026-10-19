@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from cloud_notes.store import Store
 from cloud_notes.diagnostics import StageError,describe
+from cloud_notes.lecture_status import eligible
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,6 +74,8 @@ def execute():
             client = login()
             checkpoint('读取课程')
             lectures = upstream._enumerate_lectures(client,db,reporter)
+            state['deferred_today']=sum(not eligible(item[2]) for item in lectures)
+            lectures=[item for item in lectures if eligible(item[2])]
             # Upstream catches enumeration errors; don't report an empty failed enumeration as success.
             for course in config.COURSE_IDS:
                 client.get_course_detail(course)
@@ -128,7 +131,12 @@ def execute():
                         if not client.check_alive():
                             refreshed=login(); client.vpn=refreshed.vpn; client._userinfo=None
                         summary = runner.run(course_id,title,lecture)
-                        if not summary: raise RuntimeError('lecture_incomplete')
+                        if not summary:
+                            pending=db.get_lecture(sid) or {}
+                            if pending.get('error_stage')=='no_video':
+                                state['waiting_recording']=state.get('waiting_recording',0)+1
+                                continue
+                            raise RuntimeError('lecture_incomplete')
                         row = dict(db.get_lecture(sid)); row['course_title'] = title
                         deliver(row)
                         state['completed'] += 1

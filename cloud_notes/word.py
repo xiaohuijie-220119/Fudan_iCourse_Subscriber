@@ -19,12 +19,8 @@ def safe_name(value):
     if not text or text.upper() in {'CON','PRN','AUX','NUL',*(f'COM{i}' for i in range(1,10)),*(f'LPT{i}' for i in range(1,10))}: text='课程_'+text
     return text[:65]
 def math_run(paragraph,latex):
-    from latex2mathml.converter import convert
-    from mathml2omml import convert as omml
-    xml=omml(convert(latex))
-    if '<m:oMath' not in xml: raise ValueError('Equation conversion failed')
-    xml=xml.replace('<m:oMath>',f'<m:oMath xmlns:m="{MATH_NS}">',1)
-    paragraph._p.append(parse_xml(xml.encode('utf8')))
+    from cloud_notes.equations import convert_equation
+    paragraph._p.append(convert_equation(latex))
 def inline(paragraph,text):
     text=re.sub(r'\[([^\]]+)\]\([^)]+\)',r'\1',text)
     text=text.replace(r'\(', '$').replace(r'\)', '$')
