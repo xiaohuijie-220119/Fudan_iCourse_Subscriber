@@ -28,6 +28,19 @@ def inline(paragraph,text):
         if part.startswith('$') and part.endswith('$') and len(part)>2: math_run(paragraph,part[1:-1])
         elif part.startswith('**') and part.endswith('**'): paragraph.add_run(part[2:-2]).bold=True
         else: paragraph.add_run(part.replace(chr(96),''))
+
+def table_cells(line):
+    # Markdown pipes inside $math$ or escaped \| are formula content, not columns.
+    cells=[];current=[];math=False;backslashes=0
+    for character in line.strip().strip('|'):
+        escaped=backslashes%2==1
+        if character=='$' and not escaped:math=not math
+        if character=='|' and not math and not escaped:
+            cells.append(''.join(current).strip());current=[]
+        else:current.append(character)
+        backslashes=backslashes+1 if character=='\\' else 0
+    cells.append(''.join(current).strip())
+    return cells
 def font(size=24):
     for name in ('C:/Windows/Fonts/msyh.ttc','/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'):
         if Path(name).exists(): return ImageFont.truetype(name,size)
@@ -92,14 +105,14 @@ def create_word(row, root=ROOT, pictures=()):
             line=lines[i].strip(); i+=1
             if not line or line.startswith(FENCE): continue
             if line.startswith('|') and i<len(lines) and re.match(r'^\s*\|?[\s:|-]+\|?\s*$',lines[i]):
-                headers=[c.strip() for c in line.strip('|').split('|')]; i+=1
+                headers=table_cells(line); i+=1
                 table=document.add_table(rows=1,cols=len(headers)); table.style='Table Grid'
                 for cell,title in zip(table.rows[0].cells,headers):
                     inline(cell.paragraphs[0],title)
                     shade=OxmlElement('w:shd');shade.set(qn('w:fill'),'EAF0F7');cell._tc.get_or_add_tcPr().append(shade)
                 table.rows[0]._tr.get_or_add_trPr().append(OxmlElement('w:tblHeader'))
                 while i<len(lines) and lines[i].strip().startswith('|'):
-                    values=[c.strip() for c in lines[i].strip().strip('|').split('|')]; i+=1
+                    values=table_cells(lines[i]); i+=1
                     for cell,value in zip(table.add_row().cells,values): inline(cell.paragraphs[0],value)
                 continue
             heading=re.match(r'^(#{1,6})\s+(.*)',line)

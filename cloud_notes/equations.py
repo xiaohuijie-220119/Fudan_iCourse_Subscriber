@@ -46,8 +46,13 @@ def structural(node):
 
 def convert_equation(latex):
     from latex2mathml.converter import convert
+    from latex2mathml.exceptions import MissingEndError
     from mathml2omml import convert as omml
-    mathml=convert(latex)
+    try:mathml=convert(latex)
+    except MissingEndError:
+        repaired=close_missing_environments(latex)
+        if repaired==latex:raise
+        mathml=convert(repaired)
     mathml=re.sub(r'&(?!#\d+;|#x[0-9A-Fa-f]+;|amp;|lt;|gt;|quot;|apos;)','&amp;',mathml)
     parser=etree.XMLParser(resolve_entities=False,no_network=True)
     source=etree.fromstring(mathml.encode(),parser)
@@ -59,3 +64,14 @@ def convert_equation(latex):
         return etree.fromstring(xml.encode(),parser)
     except Exception:
         return element('oMath',structural(source))
+
+def close_missing_environments(latex):
+    """Close unambiguous unclosed environments; never change existing mathematics."""
+    stack=[]
+    for match in re.finditer(r'\\(begin|end)\{([A-Za-z*]+)\}',latex):
+        action,name=match.groups()
+        if action=='begin':stack.append(name)
+        elif not stack or stack[-1]!=name:return latex
+        else:stack.pop()
+    if len(stack)>12:return latex
+    return latex+''.join(r'\end{'+name+'}' for name in reversed(stack))
