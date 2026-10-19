@@ -149,6 +149,7 @@ class Summarizer:
             return ("（内容为空）", "")
 
         errors = []
+        last_error = None
         for provider in self.providers:
             client = self._clients[provider["name"]]
             for model in provider["models"]:
@@ -157,10 +158,11 @@ class Summarizer:
                     result = self._call_llm(client, model, title, content)
                     return (result, model_id)
                 except Exception as e:
+                    last_error = e
                     print(f"[Summarizer] {model_id} failed: "
                           f"{type(e).__name__}: {e}")
-                    errors.append(f"{model_id}: {e}")
+                    errors.append(f"{model_id}: {type(e).__name__}")
 
         raise RuntimeError(
             "All LLM models failed:\n" + "\n".join(errors)
-        )
+        ) from last_error

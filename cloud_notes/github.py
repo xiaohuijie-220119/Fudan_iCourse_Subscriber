@@ -1,5 +1,10 @@
 """GitHub API client. Never expose server replies, request URLs or tokens in errors."""
 import base64
+import hashlib
+import http.client
+import socket
+import ssl
+import time
 import json
 import re
 import urllib.request
@@ -69,24 +74,30 @@ class GitHub:
             'Authorization': 'Bearer ' + self.token, 'Accept': 'application/vnd.github+json',
             'User-Agent': 'iCourse-Cloud-Workbench', 'X-GitHub-Api-Version': '2022-11-28',
             'Content-Type': 'application/json'})
-        try:
-            with urllib.request.urlopen(req, timeout=60) as response:
-                data = response.read()
-                return json.loads(data) if data else {}
-        except urllib.error.HTTPError as error:
-            raise safe_failure(error,path,req.method) from None
-        except OSError as error:
-            reason=getattr(error,'reason',error)
-            category=type(reason).__name__
-            import socket
-            import ssl
-            if isinstance(reason,socket.gaierror):label='DNS 域名解析失败'
-            elif isinstance(reason,ssl.SSLError):label='HTTPS 证书或 TLS 连接失败'
-            elif isinstance(reason,(TimeoutError,socket.timeout)):label='网络连接超时'
-            else:label='网络连接失败'
-            raise GitHubConnectionError('连接 GitHub：'+label+'（'+category+'）') from None
-        except ValueError:
-            raise GitHubConnectionError('GitHub 返回了无法解析的响应，请检查代理或网络连接') from None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    data = response.read()
+                    return json.loads(data) if data else {}
+            except urllib.error.HTTPError as error:
+                raise safe_failure(error,path,req.method) from None
+            except (OSError,http.client.RemoteDisconnected) as error:
+                reason=getattr(error,'reason',error)
+                transient=isinstance(reason,(ssl.SSLEOFError,TimeoutError,socket.gaierror,
+                                             ConnectionError,http.client.RemoteDisconnected))
+                if req.method=='GET' and transient and attempt<2:
+                    time.sleep(attempt+1)
+                    continue
+                category=type(reason).__name__
+                if isinstance(reason,socket.gaierror):label='DNS 域名解析失败'
+                elif isinstance(reason,ssl.SSLCertVerificationError):label='HTTPS 证书校验失败'
+                elif isinstance(reason,ssl.SSLEOFError):label='TLS 连接被中途断开'
+                elif isinstance(reason,ssl.SSLError):label='TLS 连接失败'
+                elif isinstance(reason,(TimeoutError,socket.timeout)):label='网络连接超时'
+                else:label='网络连接失败'
+                raise GitHubConnectionError('连接 GitHub：'+label+'（'+category+'）') from None
+            except ValueError:
+                raise GitHubConnectionError('GitHub 返回了无法解析的响应，请检查代理或网络连接') from None
 
     def head(self, branch):
         try:
@@ -110,9 +121,21 @@ class GitHub:
         if expected is not None and head != expected:
             raise RuntimeError('云端已发生更改，请刷新后重试')
         entries = []
+        existing={}
+        if head:
+            listing=self.call('/git/trees/'+head+'?recursive=1')
+            if listing.get('truncated'):raise ValueError('仓库目录过大，停止部署以保护现有内容')
+            existing={item['path']:item['sha'] for item in listing['tree'] if item['type']=='blob'}
         for name, raw in files.items():
-            sha = self.call('/git/blobs', {'content': base64.b64encode(raw).decode(), 'encoding':'base64'})['sha']
-            entries.append({'path':name, 'mode':'100644', 'type':'blob', 'sha':sha})
+            digest=hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
+            if existing.get(name)==digest:continue
+            entry={'path':name,'mode':'100644','type':'blob'}
+            if name.endswith(('.py','.yml','.yaml','.txt','.md','.json')):
+                entry['content']=raw.decode('utf-8')
+            else:
+                entry['sha']=self.call('/git/blobs', {'content':base64.b64encode(raw).decode(),'encoding':'base64'})['sha']
+            entries.append(entry)
+        if not entries:return head
         body = {'tree':entries}
         if head: body['base_tree'] = self.call('/git/commits/' + head)['tree']['sha']
         tree = self.call('/git/trees', body)['sha']

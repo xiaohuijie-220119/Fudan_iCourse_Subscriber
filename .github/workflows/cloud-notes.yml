@@ -3,6 +3,14 @@ on:
   schedule:
     - cron: "36 11 * * *"
   workflow_dispatch:
+    inputs:
+      operation:
+        description: '运行课程处理或仅测试附件邮件'
+        type: choice
+        default: process
+        options:
+          - process
+          - test-mail
 permissions:
   contents: write
 concurrency:
@@ -34,7 +42,7 @@ jobs:
             silero_vad.onnx
           key: icourse-cloud-sensevoice-v1
       - name: Download speech models
-        if: steps.models.outputs.cache-hit != 'true'
+        if: steps.models.outputs.cache-hit != 'true' && inputs.operation != 'test-mail'
         run: |
           curl --fail --location --retry 5 -o model.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
           tar xf model.tar.bz2
@@ -53,4 +61,10 @@ jobs:
           RECEIVER_EMAIL: ${{ secrets.CLOUD_RECEIVER_EMAIL }}
           WORKSPACE_KEY: ${{ secrets.CLOUD_WORKSPACE_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: python -u -m cloud_notes.runner
+          ICOURSE_TASK: ${{ inputs.operation }}
+        run: |
+          if [ "$ICOURSE_TASK" = "test-mail" ]; then
+            python -u -m cloud_notes.mail_probe
+          else
+            python -u -m cloud_notes.runner
+          fi

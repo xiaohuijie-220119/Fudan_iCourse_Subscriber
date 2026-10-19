@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 from datetime import datetime, timezone
 from cloud_notes.store import Store
+from cloud_notes.diagnostics import StageError,describe
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,6 +22,11 @@ def execute():
     state = {'phase':'恢复进度', 'total':0, 'completed':0, 'failed':0,
              'updated':datetime.now(timezone.utc).isoformat()}
     db = None
+    def record(stage,error,row=None):
+        detail=describe(stage,error)
+        if row:detail.update(course=row.get('course_title',''),lecture=row.get('sub_title',''))
+        state.setdefault('errors',[]).append(detail);state['errors']=state['errors'][-30:]
+        state.update(failure_phase=detail['stage'],error_type=detail['error_type'])
     def checkpoint(phase, **values):
         state.update(values, phase=phase, updated=datetime.now(timezone.utc).isoformat(),
                      run_id=os.environ.get('GITHUB_RUN_ID',''))
@@ -96,18 +102,22 @@ def execute():
                                 image.convert('RGB').save(path,quality=88)
                                 pictures.append(('课堂课件第 '+str(page['page_num'])+' 页',path))
                             except Exception:continue
-                        doc = create_word(row,ROOT,pictures=pictures)
+                        try:doc = create_word(row,ROOT,pictures=pictures)
+                        except Exception as error:raise StageError('Word 生成与公式转换',error) from None
                     checkpoint('Word 已保存')
                     if not row.get('emailed_at'):
                         settings = {k:os.environ.get(k,'') for k in ('SMTP_EMAIL','SMTP_PASSWORD','RECEIVER_EMAIL')}
                         if not all(settings.values()): raise ValueError('mail_configuration_missing')
-                        if not send_attachment(doc,row,settings): raise RuntimeError('mail_not_accepted')
+                        try:
+                            if not send_attachment(doc,row,settings): raise RuntimeError('mail_not_accepted')
+                        except Exception as error:raise StageError('附件邮件发送',error) from None
                         db.mark_emailed(row['sub_id'])
                         checkpoint('附件邮件已发送')
                 # Retry document/mail failures even when transcription is already complete.
                 for row in db.get_unsent_lectures():
                     try: deliver(row)
-                    except Exception: state['failed'] += 1; checkpoint('有文档或邮件待重试')
+                    except Exception as error:
+                        state['failed'] += 1;record('文档与邮件重试',error,row);checkpoint('有文档或邮件待重试')
                 for course_id, title, lecture in lectures:
                     # Leave enough time for final checkpoint before the Actions hard limit.
                     if time.monotonic()-started > 4.5*3600:
@@ -124,7 +134,9 @@ def execute():
                         state['completed'] += 1
                     except Exception as error:
                         state['failed'] += 1
-                        state['error_type'] = type(error).__name__
+                        saved=db.get_lecture(sid) or {}
+                        stage={'transcribe':'音频转写','summarize':'AI 笔记生成','no_video':'录播获取'}.get(saved.get('error_stage'),'课程转写与整理')
+                        record(stage,error,{'course_title':title,'sub_title':lecture.get('sub_title','')})
                     finally:
                         scheduler.image_cache.discard(sid)
                         scheduler.audio_downloader.release(sid)
@@ -133,7 +145,11 @@ def execute():
             checkpoint('部分课次待重试' if state['failed'] else '本次检查完成')
             if state['failed']: raise RuntimeError('lectures_need_retry')
         except Exception as error:
-            checkpoint('任务未完成', failure_phase=state['phase']+' / '+state.get('auth_step',''), error_type=type(error).__name__)
+            if not state.get('errors'):
+                phase=state['phase']
+                if phase in ('统一身份认证','验证课程接口'):phase+=' / '+state.get('auth_step','')
+                record(phase,error)
+            checkpoint('任务未完成')
             raise
         finally:
             if db: db.conn.close()
