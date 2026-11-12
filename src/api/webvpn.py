@@ -304,6 +304,8 @@ class WebVPNSession:
 
         login_token = data.get("loginToken", "")
         if not login_token:
+            if self._verified_icourse_session(student_id):
+                return True
             raise CourseAuthenticationError(200, missing_ticket=True)
         print("    loginToken: OK")
 
@@ -364,6 +366,23 @@ class WebVPNSession:
                 pass
 
         raise RuntimeError("icourse_api_verification_failed")
+
+    def _verified_icourse_session(self, student_id: str) -> bool:
+        """Check the existing session; do not accept a bare success code."""
+        try:
+            response = self.get(f"{config.ICOURSE_BASE}/userapi/v1/infosimple",
+                                timeout=10, allow_redirects=False)
+            if response.status_code != 200:
+                return False
+            payload = response.json()
+            if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
+                return False
+            profile = payload.get("params") or payload.get("data")
+            if not isinstance(profile, dict) or not profile.get("id"):
+                return False
+            return str(profile.get("account", "")) == str(student_id)
+        except (requests.RequestException, ValueError):
+            return False
 
     def get(self, url: str, **kwargs) -> requests.Response:
         """GET request through WebVPN. Converts URL automatically."""
