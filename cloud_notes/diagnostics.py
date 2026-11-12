@@ -2,6 +2,13 @@
 import smtplib
 import ssl
 
+class CourseAuthenticationError(RuntimeError):
+    def __init__(self, code, *, missing_ticket=False):
+        value = str(code) if type(code) in (int, str) else ''
+        self.business_code = value if value.isascii() and value.isdecimal() and len(value) <= 10 else None
+        self.missing_ticket = missing_ticket
+        super().__init__('course_authentication_failed')
+
 class StageError(RuntimeError):
     def __init__(self,stage,cause):
         self.stage=stage;self.cause=cause
@@ -21,6 +28,11 @@ def describe(stage,error):
     elif isinstance(error,(TimeoutError,)):reason='连接或读取响应超时'
     elif isinstance(error,ssl.SSLError):reason='HTTPS 或 SMTP 加密连接失败'
     result={'stage':stage,'error_type':type(error).__name__,'reason':reason}
+    if isinstance(error,CourseAuthenticationError):
+        result['reason'] = ('学校返回成功业务码，但未提供登录票据' if error.missing_ticket else '学校课程认证未通过')
+        if error.business_code:
+            result['reason'] += '（学校业务码：'+error.business_code+'）'
+        return result
     code=getattr(error,'smtp_code',getattr(error,'status_code',None))
     if isinstance(code,int) and 100<=code<=599:
         result['response_code']=code

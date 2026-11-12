@@ -18,6 +18,7 @@ from Crypto.Cipher import PKCS1_v1_5
 import base64
 
 from src.runtime import config
+from cloud_notes.diagnostics import CourseAuthenticationError
 
 
 def encrypt_host(hostname: str) -> str:
@@ -299,13 +300,11 @@ class WebVPNSession:
         data = resp.json()
 
         if str(data.get("code")) != "200":
-            raise RuntimeError(
-                f"iCourse CAS auth failed (code={data.get('code')})"
-            )
+            raise CourseAuthenticationError(data.get("code"))
 
         login_token = data.get("loginToken", "")
         if not login_token:
-            raise RuntimeError("No loginToken in iCourse CAS response")
+            raise CourseAuthenticationError(200, missing_ticket=True)
         print("    loginToken: OK")
 
         # Step 6: Get CAS ticket (through WebVPN)
