@@ -46,7 +46,9 @@ class Store:
             identity = 'document:' + relative
             blob = 'files/' + blob_name(identity)
             updates[blob] = encrypt(path.read_bytes(), self.key, identity)
-            existing[relative] = {'path':relative, 'blob':blob, 'size':path.stat().st_size}
+            from cloud_notes.word import formula_warning_count
+            existing[relative] = {'path':relative, 'blob':blob, 'size':path.stat().st_size,
+                                  'formula_warnings':formula_warning_count(path)}
         self.manifest['documents'] = list(existing.values())
         if db is not None:
             from cloud_notes.lecture_status import snapshot

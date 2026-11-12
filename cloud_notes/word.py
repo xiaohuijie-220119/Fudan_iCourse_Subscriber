@@ -20,7 +20,25 @@ def safe_name(value):
     return text[:65]
 def math_run(paragraph,latex):
     from cloud_notes.equations import convert_equation
-    paragraph._p.append(convert_equation(latex))
+    try:paragraph._p.append(convert_equation(latex))
+    except Exception:
+        warnings=getattr(paragraph.part,'_icourse_formula_warnings',None)
+        if warnings is None:raise
+        warnings.append(latex)
+        paragraph.add_run('[公式 '+str(len(warnings))+' 待校对，原式见文末]').italic=True
+
+def formula_warning_count(path):
+    import zipfile
+    from xml.etree import ElementTree
+    try:
+        with zipfile.ZipFile(path) as archive:
+            root=ElementTree.fromstring(archive.read('docProps/core.xml'))
+        for node in root:
+            if node.tag.endswith('}description'):
+                match=re.search(r'icourse\.formula_warnings=(\d+)',node.text or '')
+                if match:return int(match[1])
+    except (OSError,ValueError,KeyError,zipfile.BadZipFile,ElementTree.ParseError):pass
+    return 0
 def inline(paragraph,text):
     text=re.sub(r'\[([^\]]+)\]\([^)]+\)',r'\1',text)
     text=text.replace(r'\(', '$').replace(r'\)', '$')
@@ -72,6 +90,7 @@ def create_word(row, root=ROOT, pictures=()):
     path=folder/(safe_name(row.get('sub_title') or row.get('date') or sid)+'_'+sid+'.docx')
     if path.exists(): return path
     document=Document(); section=document.sections[0]
+    document.part._icourse_formula_warnings=[]
     section.top_margin=section.bottom_margin=Cm(2)
     section.left_margin=section.right_margin=Cm(2.2)
     for name in ('Normal','Title','Heading 1','Heading 2','Heading 3','Caption'):
@@ -128,6 +147,16 @@ def create_word(row, root=ROOT, pictures=()):
                 document.add_picture(str(picture),width=Cm(15.5))
                 document.add_paragraph(label,style='Caption')
             except (ValueError,OSError): continue
+    warnings=document.part._icourse_formula_warnings
+    document.core_properties.comments='icourse.formula_warnings='+str(len(warnings))
+    if warnings:
+        notice='公式校对提示：本课有 '+str(len(warnings))+' 处原式未能可靠转换，正文已标注，原式完整保留在文末，请结合课件校对。'
+        document.paragraphs[2].insert_paragraph_before(notice)
+        document.add_paragraph('待校对公式原式',style='Heading 1')
+        document.add_paragraph('以下内容为对应标记处的原始公式文本，保留供修订，不代表公式已转换成功。')
+        for index,source in enumerate(warnings,1):
+            document.add_paragraph('公式 '+str(index),style='Heading 2')
+            document.add_paragraph(source)
     fd,tmp=tempfile.mkstemp(suffix='.docx',dir=folder); os.close(fd)
     try: document.save(tmp); os.replace(tmp,path)
     finally:
@@ -139,8 +168,9 @@ def send_attachment(path,row,settings):
     from email.message import EmailMessage
     message=EmailMessage()
     message['From']=settings['SMTP_EMAIL']; message['To']=settings['RECEIVER_EMAIL']
-    message['Subject']=f"[iCourse] {row['course_title']} {row.get('sub_title','')} · Word 笔记"
-    message.set_content('本次课程笔记已整理为 Word 文档，请查看附件。')
+    count=formula_warning_count(path)
+    message['Subject']=f"[iCourse] {row['course_title']} {row.get('sub_title','')} · Word 笔记"+('（含待校对公式）' if count else '')
+    message.set_content(('本次课程笔记见 Word 附件；其中 '+str(count)+' 处公式待校对，原式保留在文末。') if count else '本次课程笔记已整理为 Word 文档，请查看附件。')
     message.add_attachment(Path(path).read_bytes(),maintype='application',
         subtype='vnd.openxmlformats-officedocument.wordprocessingml.document',filename=Path(path).name)
     with smtplib.SMTP_SSL('smtp.qq.com',465,context=ssl.create_default_context(),timeout=45) as smtp:

@@ -26,6 +26,8 @@ def snapshot(db,now=None,documents=()):
         row=dict(raw);transcribed=bool(row.get('transcript'));summary=bool(row.get('summary'))
         stage=row.get('error_stage')
         status='已发送' if row.get('emailed_at') else '已整理' if summary else '已转录' if transcribed else '待处理'
+        matching=[d for d in documents if d['path'].endswith('_'+str(row['sub_id'])+'.docx')]
+        warnings=sum(d.get('formula_warnings',0) for d in matching)
         reason=''
         if stage=='no_video':status='等待回放';reason=labels[stage]
         elif stage:status='失败';reason=labels.get(stage,'课程处理')
@@ -35,5 +37,6 @@ def snapshot(db,now=None,documents=()):
                     'lecture':row.get('sub_title') or str(row['sub_id']),'date':row.get('date',''),
                     'status':status,'transcribed':transcribed,'summarized':summary,
                     'word_saved':any(d['path'].endswith('_'+str(row['sub_id'])+'.docx') for d in documents),
+                    'formula_warnings':warnings,
                     'emailed':bool(row.get('emailed_at')),'reason':reason})
     return out
