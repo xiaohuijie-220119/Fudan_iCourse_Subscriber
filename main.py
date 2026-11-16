@@ -25,7 +25,7 @@ from src.runtime.reporter import Reporter
 from src.runtime.scheduler import Scheduler
 from src.ai.summarizer import Summarizer
 from src.ai.transcriber import Transcriber
-from src.api.webvpn import WebVPNSession
+from src.api.webvpn import SecondFactorError, WebVPNSession
 
 
 def login_with_retry(max_attempts: int = 10) -> WebVPNSession:
@@ -46,6 +46,9 @@ def login_with_retry(max_attempts: int = 10) -> WebVPNSession:
             print("[Login] iCourse CAS...")
             vpn.authenticate_icourse()
             return vpn
+        except SecondFactorError:
+            vpn.session.close()
+            raise
         except Exception as e:
             if attempt < max_attempts - 1:
                 print(f"  Failed: {type(e).__name__}: {e}; retrying...")
@@ -288,7 +291,7 @@ def _crawl_semester_catalog(client: ICourseClient, db: Database,
     reporter.info("Semester catalog crawl complete.")
 
 
-def run():
+def run(publish_notes=None):
     """Single execution of the full pipeline."""
     reporter = Reporter()
     reporter.run_header()
@@ -327,6 +330,9 @@ def run():
 
     try:
         all_lectures = _enumerate_lectures(client, db, reporter)
+        if publish_notes:
+            from cloud_notes.lecture_status import eligible
+            all_lectures = [item for item in all_lectures if eligible(item[2])]
         _drive_lectures(
             client, db, scheduler, transcriber, summarizer, reporter,
             all_lectures, email_items,
@@ -335,7 +341,10 @@ def run():
     finally:
         scheduler.shutdown()
 
-    _send_email(emailer, db, reporter, email_items)
+    if publish_notes:
+        publish_notes(emailer, db, email_items)
+    else:
+        _send_email(emailer, db, reporter, email_items)
     reporter.run_footer()
 
 

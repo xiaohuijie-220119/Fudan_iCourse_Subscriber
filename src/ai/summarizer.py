@@ -18,6 +18,7 @@ SYSTEM_PROMPT= r"""你是一个专业的课程助教。你的任务是根据用�
 4. **公式规范**：所有数学公式或科学变量必须使用规范的 LaTeX 语法（行内公式用 $...$，行间公式用 $$...$$）。由于图床限制，latex公式中不要出现中文。
 5. **忠于原文与详略得当**：总结必须有详有略，总体以详细风格为主，长度适宜或偏长（例如，对于90分钟长度的课程，总结长度应为5000字左右；135分钟的课程，应为8000字左右。输出和输入的长度压缩比例在1:8左右为宜），
 包含具体的推导细节、案例、文献或者核心概念，不要过度概括，也不要仅仅原文复述。禁止捏造录音中未提及的内容。
+在确有必要且有材料支持时，可以用一个 diagram 代码块补充流程示意图。代码块内是 JSON，含 title 字符串和 nodes 字符串数组，每个节点代表一步。不要编造步骤。
 6. 你需要格外注意课程中是否提及了作业、考试、签到、组队等关键事项，如果有的话，用三级标题【课程事项提醒】标注在开头。
 7. **文风示例**：以下是一个关于"梯度下降"的片段，展示了笔记总结过程中【错误的】和【正确的】的两种总结风格，请严格模仿后者。
 
@@ -66,13 +67,6 @@ SYSTEM_PROMPT= r"""你是一个专业的课程助教。你的任务是根据用�
    - 但是，你的总结的组织的主线仍然应该以讲师的讲解为逻辑组织，同时把PPT的信息补充进去。
    - 同时，需要注意的是，由于该平台以屏幕截图的方式记录ppt，因此，尽管我们提供的ocr版本已经尽最大努力进行了清洗，你收到的ppt仍然可能有无关网页、导航栏、桌面或系统页面等无关噪音。这些噪音不应被用于课程内容的总结。
    - 输出仍按之前的格式要求，不要保留时间戳标签，只把这些信息当作上下文辅助理解，不用说哪些来自转写哪些来自ppt，自然地合并录音转写和ppt中的知识，生成高质量笔记。"""
-
-SYSTEM_PROMPT += r"""
-9. 最后用【本课重点】提炼复习重点。作业与考试提醒必须有原文依据，没有明确事项就说明未提及。
-10. 若确有助于理解，可增加一个解释性关系图，使用 diagram 围栏代码块，内容为 JSON：
-{"title":"概念关系","nodes":["概念一","概念二","概念三"]}。
-节点为2至6个短句，不捏造事实；没有合适关系时不生成。LaTeX 仅使用可转换的标准数学命令。
-"""
 
 class Summarizer:
     """Course lecture summarizer with multi-provider fallback.
@@ -149,7 +143,6 @@ class Summarizer:
             return ("（内容为空）", "")
 
         errors = []
-        last_error = None
         for provider in self.providers:
             client = self._clients[provider["name"]]
             for model in provider["models"]:
@@ -158,11 +151,10 @@ class Summarizer:
                     result = self._call_llm(client, model, title, content)
                     return (result, model_id)
                 except Exception as e:
-                    last_error = e
                     print(f"[Summarizer] {model_id} failed: "
                           f"{type(e).__name__}: {e}")
-                    errors.append(f"{model_id}: {type(e).__name__}")
+                    errors.append(f"{model_id}: {e}")
 
         raise RuntimeError(
             "All LLM models failed:\n" + "\n".join(errors)
-        ) from last_error
+        )

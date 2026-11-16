@@ -1,0 +1,79 @@
+name: iCourse Word Notes
+
+on:
+  schedule:
+    - cron: "36 11 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: icourse-word-notes
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Python packages
+        id: cache-pip
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.pythonLocation }}/lib/python*/site-packages
+          key: pip-${{ hashFiles('requirements-cloud.txt', 'requirements.txt') }}
+
+      - name: Install Python dependencies
+        if: steps.cache-pip.outputs.cache-hit != 'true'
+        run: pip install -r requirements-cloud.txt
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-cjk
+
+      - name: Cache ASR models
+        id: cache-models
+        uses: actions/cache@v4
+        with:
+          path: |
+            sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
+            silero_vad.onnx
+          key: asr-models-sense-voice-2024-07-17
+
+      - name: Download ASR models
+        if: steps.cache-models.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          tar xf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          rm sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+
+      - name: Cache RapidOCR models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rapidocr
+          key: rapidocr-onnx-default-v1
+
+      - name: Run original transcription and publish Word notes
+        env:
+          StuId: ${{ secrets.REBUILD_STUID }}
+          UISPsw: ${{ secrets.REBUILD_UISPSW }}
+          UIS_TOTP_SECRET: ${{ secrets.REBUILD_UIS_TOTP_SECRET }}
+          COURSE_IDS: ${{ secrets.REBUILD_COURSE_IDS }}
+          DEEPSEEK_API_KEY: ${{ secrets.REBUILD_DEEPSEEK_API_KEY }}
+          SMTP_EMAIL: ${{ secrets.REBUILD_SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.REBUILD_SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.REBUILD_RECEIVER_EMAIL }}
+          WORKSPACE_KEY: ${{ secrets.REBUILD_WORKSPACE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -u -m cloud_notes.publish

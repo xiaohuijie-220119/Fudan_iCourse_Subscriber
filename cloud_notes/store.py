@@ -8,7 +8,7 @@ import tempfile
 from cloud_notes.crypto import encrypt, decrypt, blob_name
 from cloud_notes.github import GitHub
 
-BRANCH = 'cloud-workspace-v1'
+BRANCH = 'icourse-word-v2'
 
 def safe_path(root, relative):
     if not isinstance(relative,str) or '\\' in relative or ':' in relative:
