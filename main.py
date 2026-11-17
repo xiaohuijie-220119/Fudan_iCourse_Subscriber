@@ -151,14 +151,14 @@ def _drive_lectures(client: ICourseClient, db: Database,
                     scheduler: Scheduler, transcriber: Transcriber,
                     summarizer: Summarizer, reporter: Reporter,
                     all_lectures: list[tuple[str, str, dict]],
-                    email_items: list) -> None:
+                    email_items: list, batch=None) -> None:
     """Phase 2: run each lecture through LectureRunner.
 
     Pre-schedules the first lecture's prefetch (audio + images) before
     entering the loop; subsequent prefetches are kicked off from inside
     each LectureRunner.run via ``next_info``.
     """
-    if not all_lectures:
+    if not all_lectures or (batch and not batch.can_start()):
         return
 
     runner = LectureRunner(
@@ -169,9 +169,12 @@ def _drive_lectures(client: ICourseClient, db: Database,
     runner.prefetch_first(first_course, str(first_lec["sub_id"]))
 
     for i, (course_id, course_title, lecture) in enumerate(all_lectures):
+        if batch and not batch.can_start():
+            break
         sub_id = str(lecture["sub_id"])
+        item = None
         next_info: tuple[str, str] | None = None
-        if i + 1 < len(all_lectures):
+        if i + 1 < len(all_lectures) and (not batch or batch.can_prefetch()):
             next_course, _, next_lec = all_lectures[i + 1]
             next_info = (next_course, str(next_lec["sub_id"]))
 
@@ -181,13 +184,15 @@ def _drive_lectures(client: ICourseClient, db: Database,
                 course_id, course_title, lecture, next_info=next_info,
             )
             if summary:
-                email_items.append({
+                item = {
                     "sub_id": sub_id,
                     "course_title": course_title,
                     "sub_title": lecture.get("sub_title", sub_id),
                     "date": lecture.get("date", ""),
                     "summary": summary,
-                })
+                }
+                if not batch:
+                    email_items.append(item)
         except Exception:
             reporter.lecture_error(sub_id)
             traceback.print_exc()
@@ -197,6 +202,8 @@ def _drive_lectures(client: ICourseClient, db: Database,
             # PPTPipeline.submit released the cache.
             scheduler.image_cache.discard(sub_id)
             scheduler.audio_downloader.release(sub_id)
+        if batch:
+            batch.record_lecture(db, item)
 
 
 def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
@@ -291,7 +298,7 @@ def _crawl_semester_catalog(client: ICourseClient, db: Database,
     reporter.info("Semester catalog crawl complete.")
 
 
-def run(publish_notes=None):
+def run(batch=None):
     """Single execution of the full pipeline."""
     reporter = Reporter()
     reporter.run_header()
@@ -318,7 +325,10 @@ def run(publish_notes=None):
     email_items: list = []
 
     # Discover new semesters every run; only fetch catalogs not yet stored.
-    _crawl_semester_catalog(client, db, reporter)
+    if not batch:
+        _crawl_semester_catalog(client, db, reporter)
+    else:
+        batch.emailer = emailer
 
     if not config.COURSE_IDS:
         # Crawl-only mode: nothing to process, just persist + exit.
@@ -330,19 +340,21 @@ def run(publish_notes=None):
 
     try:
         all_lectures = _enumerate_lectures(client, db, reporter)
-        if publish_notes:
+        if batch:
             from cloud_notes.lecture_status import eligible
             all_lectures = [item for item in all_lectures if eligible(item[2])]
+            batch.queue_size = len(all_lectures)
+            batch.save(db, "已读取课程，正在处理课次")
         _drive_lectures(
             client, db, scheduler, transcriber, summarizer, reporter,
-            all_lectures, email_items,
+            all_lectures, email_items, batch=batch,
         )
 
     finally:
         scheduler.shutdown()
 
-    if publish_notes:
-        publish_notes(emailer, db, email_items)
+    if batch:
+        batch.finish(db)
     else:
         _send_email(emailer, db, reporter, email_items)
     reporter.run_footer()

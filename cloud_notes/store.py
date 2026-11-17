@@ -39,6 +39,7 @@ class Store:
 
     def save(self, db, status):
         updates = {}
+        manifest = dict(self.manifest)
         existing = {d['path']:d for d in self.manifest['documents']}
         for path in (self.root/'documents').glob('*/*.docx'):
             relative = path.relative_to(self.root/'documents').as_posix()
@@ -49,17 +50,18 @@ class Store:
             from cloud_notes.word import formula_warning_count
             existing[relative] = {'path':relative, 'blob':blob, 'size':path.stat().st_size,
                                   'formula_warnings':formula_warning_count(path)}
-        self.manifest['documents'] = list(existing.values())
+        manifest['documents'] = list(existing.values())
         if db is not None:
             from cloud_notes.lecture_status import snapshot
-            self.manifest['lectures']=snapshot(db,documents=self.manifest['documents'])
+            manifest['lectures']=snapshot(db,documents=manifest['documents'])
             with tempfile.TemporaryDirectory() as directory:
                 snapshot = Path(directory)/'state.db'
                 copy = sqlite3.connect(snapshot)
                 with db._lock: db.conn.backup(copy)
                 copy.close()
                 updates['database.enc'] = encrypt(gzip.compress(snapshot.read_bytes()), self.key, 'database')
-                self.manifest['database'] = 'database.enc'
-        self.manifest['status'] = status
-        updates['workspace.enc'] = encrypt(json.dumps(self.manifest,ensure_ascii=False).encode(),self.key,'manifest')
+                manifest['database'] = 'database.enc'
+        manifest['status'] = status
+        updates['workspace.enc'] = encrypt(json.dumps(manifest,ensure_ascii=False).encode(),self.key,'manifest')
         self.api.commit(BRANCH, updates, 'Save encrypted course checkpoint')
+        self.manifest = manifest
